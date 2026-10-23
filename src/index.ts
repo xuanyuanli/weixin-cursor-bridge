@@ -17,7 +17,14 @@ import {
   pickNotifyUser,
   startScheduler,
 } from "./schedule.js";
-import { appendDraft, clearDraft, draftStats, flushDraft, type DraftMap } from "./draft.js";
+import {
+  appendDraft,
+  clearDraft,
+  draftStats,
+  flushDraft,
+  hasDraft,
+  type DraftMap,
+} from "./draft.js";
 import { CLOSE_MARK, parseInbound, SEND_MARK } from "./protocol.js";
 import { chunkText, formatDraftAck, stripMarkdown } from "./reply.js";
 import { readJson, writeJson } from "./store.js";
@@ -157,7 +164,7 @@ async function main(): Promise<void> {
     console.log(`已加载 ${String(jobsFile.jobs.length)} 个计划任务`);
     startScheduler({
       file: jobsFile,
-      isBusy: () => jobs.size > 0 || scheduledRunning,
+      canStart: () => jobs.size === 0 && !scheduledRunning,
       onSkip: (reason) => {
         console.log(`schedule skip: ${reason}`);
       },
@@ -188,7 +195,7 @@ async function main(): Promise<void> {
             const result = await run.done;
             if (result.sessionId) {
               sessions[sessionKey] = { sessionId: result.sessionId };
-              if (notifyUser) {
+              if (notifyUser && !hasDraft(drafts, notifyUser)) {
                 sessions[notifyUser] = { sessionId: result.sessionId };
               }
               persistSessions();

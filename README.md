@@ -42,7 +42,7 @@ npm run logout   # 清凭证，下次重新扫码
 
 复制 `jobs.example.yaml` 为 `jobs.yaml`（已 gitignore）并填 `notifyUser`。无该文件时只做交互。
 
-到点且 agent 空闲时，用独立 session `jobs.<id>` 跑 backend `.cursor/skills-wcb/<skill>`，微信推摘要；细节写 skill 的 `output/`。忙则跳过本 tick。推送后把当前微信 session 指到该任务，可用 `。。` 续问。无 `context_token` 只打日志。
+cron 命中则入队，同一时刻只跑一个 agent（交互与计划串行）；忙时排队，空闲后当天补跑。`skipHolidays` 跳法定假日（周末仍跑）。分类/翻译用日字段 `*/5`。任务 session 为 `jobs.<id>`；草稿为空才把当前微信 session 指过去。无 `context_token` 只打日志。
 
 ## 合规
 

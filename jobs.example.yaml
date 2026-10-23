@@ -3,21 +3,19 @@ notifyUser: ""
 jobs:
   - id: error-alert
     enabled: true
-    cron: "30 9 * * *"
+    cron: "0 12 * * *"
     skill: aliyun-error-log
-    extraPrompt: "先跑 .cursor/skills-wcb/scripts/schedule_gate.py --mode holiday；法定假日 skip。窗口走增量。"
+    skipHolidays: true
   - id: notify-fail
     enabled: true
-    cron: "0 10 * * *"
+    cron: "20 12 * * *"
     skill: notify-fail
-    extraPrompt: "先跑 .cursor/skills-wcb/scripts/schedule_gate.py --mode holiday；法定假日 skip。窗口近 24h。"
+    skipHolidays: true
   - id: lot-tag-audit
     enabled: true
-    cron: "0 13 * * *"
+    cron: "40 12 */5 * *"
     skill: lot-tagging-llm-quality
-    extraPrompt: "先跑 .cursor/skills-wcb/scripts/schedule_gate.py --mode interval --days 5 --job lot-tag-audit；未满 5 天 skip。不跳假日。lookback-days=5。成功后 --mark。只做分类域。"
   - id: translation-audit
     enabled: true
-    cron: "0 14 * * *"
+    cron: "0 13 */5 * *"
     skill: translation-llm-quality
-    extraPrompt: "先跑 .cursor/skills-wcb/scripts/schedule_gate.py --mode interval --days 5 --job translation-audit；未满 5 天 skip。不跳假日。lookback-days=5。成功后 --mark。只做翻译域。"

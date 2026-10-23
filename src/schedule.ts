@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Cron } from "croner";
+import { isCnHoliday } from "./holidays.js";
 import { parse } from "yaml";
 
 export type JobSpec = {
@@ -8,6 +9,7 @@ export type JobSpec = {
   cron: string;
   skill: string;
   extraPrompt?: string;
+  skipHolidays: boolean;
 };
 
 export type JobsFile = {
@@ -89,6 +91,7 @@ export function parseJobsFile(text: string): JobsFile {
       cron,
       enabled: rec.enabled !== false,
       extraPrompt: typeof rec.extraPrompt === "string" ? rec.extraPrompt : undefined,
+      skipHolidays: rec.skipHolidays === true,
     });
   }
   return { timezone, notifyUser, jobs };
@@ -115,7 +118,7 @@ export function loadJobsFile(path: string): JobsFile | null {
 }
 
 /**
- * Jobs whose cron hits `now` and have not already fired this minute.
+ * Cron-hit enabled jobs not yet seen this minute, minus holiday-gated ones.
  */
 export function dueJobs(
   file: JobsFile,
@@ -124,10 +127,29 @@ export function dueJobs(
 ): JobSpec[] {
   const tz = file.timezone || "Asia/Shanghai";
   const key = minuteKey(now, tz);
-  return file.jobs.filter(
-    (job) =>
-      job.enabled && lastFired.get(job.id) !== key && cronHitsMinute(job.cron, tz, now),
-  );
+  return file.jobs.filter((job) => {
+    if (!job.enabled || lastFired.get(job.id) === key) {
+      return false;
+    }
+    if (!cronHitsMinute(job.cron, tz, now)) {
+      return false;
+    }
+    if (job.skipHolidays && isCnHoliday(now, tz)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Append job if this id is not already waiting.
+ */
+export function enqueueUnique(queue: JobSpec[], job: JobSpec): boolean {
+  if (queue.some((item) => item.id === job.id)) {
+    return false;
+  }
+  queue.push(job);
+  return true;
 }
 
 /**
@@ -139,9 +161,9 @@ export function buildJobPrompt(job: JobSpec): string {
     `执行定时 skill：${job.skill}（job id=${job.id}）。`,
     "先读 .cursor/skills-wcb/WCB_OUTPUT.md，再读 .cursor/skills-wcb/" +
       job.skill +
-      "/SKILL.md，并按该 skill 执行。",
+      "/SKILL.md，并按该 skill 执行。不要做调度/门禁。",
     extra ?? "",
-    "禁止计划模式。高置信当场改并点名路径；拿不准只列 1. 2. 3.。最终回复用【已自动处理】【需要确认】【细节】。",
+    "禁止计划模式。高置信当场改并点名路径；拿不准只列 1. 2. 3.。最终回复用【已自动处理】【需要确认】【细节】。终态只写一份短 md，json 嵌在文内。",
   ]
     .filter(Boolean)
     .join("\n");
@@ -151,41 +173,50 @@ export type SchedulerHooks = {
   intervalMs?: number;
   now?: () => Date;
   file: JobsFile;
-  isBusy: () => boolean;
-  onSkip: (reason: string) => void;
+  canStart: () => boolean;
+  onSkip?: (reason: string) => void;
   onDue: (job: JobSpec) => Promise<void>;
 };
 
 /**
- * Poll about every 20s; fire each matching cron once per timezone-minute.
+ * Cron 命中则入队；agent 空闲时串行 drain。忙不丢当天任务。
  */
 export function startScheduler(hooks: SchedulerHooks): { stop: () => void } {
   const lastFired = new Map<string, string>();
+  const queue: JobSpec[] = [];
   let inflight = false;
   const tz = hooks.file.timezone || "Asia/Shanghai";
 
   const tick = async (): Promise<void> => {
-    if (inflight) {
-      return;
-    }
-    if (hooks.isBusy()) {
-      hooks.onSkip("busy");
-      return;
-    }
     const now = hooks.now?.() ?? new Date();
-    const due = dueJobs(hooks.file, now, lastFired);
-    if (due.length === 0) {
+    const key = minuteKey(now, tz);
+    for (const job of hooks.file.jobs) {
+      if (!job.enabled || lastFired.get(job.id) === key) {
+        continue;
+      }
+      if (!cronHitsMinute(job.cron, tz, now)) {
+        continue;
+      }
+      lastFired.set(job.id, key);
+      if (job.skipHolidays && isCnHoliday(now, tz)) {
+        hooks.onSkip?.(`holiday ${job.id}`);
+        continue;
+      }
+      enqueueUnique(queue, job);
+    }
+    if (inflight || !hooks.canStart() || queue.length === 0) {
       return;
     }
     inflight = true;
-    const key = minuteKey(now, tz);
     try {
-      for (const job of due) {
-        if (hooks.isBusy()) {
-          hooks.onSkip(`busy skip ${job.id}`);
-          continue;
+      while (queue.length > 0) {
+        if (!hooks.canStart()) {
+          break;
         }
-        lastFired.set(job.id, key);
+        const job = queue.shift();
+        if (!job) {
+          break;
+        }
         try {
           await hooks.onDue(job);
         } catch (err) {

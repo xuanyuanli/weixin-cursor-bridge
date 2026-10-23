@@ -37,6 +37,13 @@ export function clearDraft(map: DraftMap, sender: string): void {
   delete map[sender];
 }
 
+/**
+ * Whether the sender has unsent draft lines.
+ */
+export function hasDraft(map: DraftMap, sender: string): boolean {
+  return (map[sender]?.lines.length ?? 0) > 0;
+}
+
 export function draftStats(state: DraftState | undefined): { lines: number; chars: number } {
   const lines = state?.lines ?? [];
   return {

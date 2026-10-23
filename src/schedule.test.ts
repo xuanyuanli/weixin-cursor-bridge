@@ -3,10 +3,12 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { isCnHoliday } from "./holidays.js";
 import {
   buildJobPrompt,
   cronHitsMinute,
   dueJobs,
+  enqueueUnique,
   jobSessionKey,
   loadJobsFile,
   minuteKey,
@@ -16,14 +18,15 @@ import {
 } from "./schedule.js";
 
 const TZ = "Asia/Shanghai";
-/** 2026-10-23 09:30:40 +8 */
-const AT_0930 = new Date("2026-10-23T01:30:40.000Z");
-/** 2026-10-23 09:31:00 +8 */
-const AT_0931 = new Date("2026-10-23T01:31:00.000Z");
-/** 2026-10-23 13:00:05 +8 */
-const AT_1300 = new Date("2026-10-23T05:00:05.000Z");
-/** 2026-10-23 14:00:05 +8 */
-const AT_1400 = new Date("2026-10-23T06:00:05.000Z");
+/** 2026-10-23 12:00:10 +8 */
+const AT_1200 = new Date("2026-10-23T04:00:10.000Z");
+/** 2026-10-23 12:01:00 +8 */
+const AT_1201 = new Date("2026-10-23T04:01:00.000Z");
+// 2026-10-21 12:40 +8; day 21 matches every-5th-day-of-month
+const AT_1240_D21 = new Date("2026-10-21T04:40:05.000Z");
+// 2026-10-23 12:40 +8; day 23 does not match
+const AT_1240_D23 = new Date("2026-10-23T04:40:05.000Z");
+const AT_ND = new Date("2026-10-01T04:00:10.000Z");
 
 const EXAMPLE = `
 timezone: Asia/Shanghai
@@ -31,37 +34,32 @@ notifyUser: ""
 jobs:
   - id: error-alert
     enabled: true
-    cron: "30 9 * * *"
+    cron: "0 12 * * *"
     skill: aliyun-error-log
-    extraPrompt: "先跑 .cursor/skills-wcb/scripts/schedule_gate.py --mode holiday；法定假日 skip。窗口走增量。"
+    skipHolidays: true
   - id: notify-fail
     enabled: true
-    cron: "0 10 * * *"
+    cron: "20 12 * * *"
     skill: notify-fail
-    extraPrompt: "先跑 .cursor/skills-wcb/scripts/schedule_gate.py --mode holiday；法定假日 skip。窗口近 24h。"
+    skipHolidays: true
   - id: lot-tag-audit
     enabled: true
-    cron: "0 13 * * *"
+    cron: "40 12 */5 * *"
     skill: lot-tagging-llm-quality
-    extraPrompt: "先跑 .cursor/skills-wcb/scripts/schedule_gate.py --mode interval --days 5 --job lot-tag-audit；未满 5 天 skip。不跳假日。lookback-days=5。成功后 --mark。只做分类域。"
   - id: translation-audit
     enabled: true
-    cron: "0 14 * * *"
+    cron: "0 13 */5 * *"
     skill: translation-llm-quality
-    extraPrompt: "先跑 .cursor/skills-wcb/scripts/schedule_gate.py --mode interval --days 5 --job translation-audit；未满 5 天 skip。不跳假日。lookback-days=5。成功后 --mark。只做翻译域。"
 `;
 
 describe("parseJobsFile", () => {
-  it("reads example jobs and extraPrompt", () => {
+  it("reads skipHolidays and */5 crons", () => {
     const file = parseJobsFile(EXAMPLE);
-    assert.equal(file.timezone, TZ);
-    assert.equal(file.notifyUser, "");
     assert.equal(file.jobs.length, 4);
-    assert.equal(file.jobs[2]?.skill, "lot-tagging-llm-quality");
+    assert.equal(file.jobs[0]?.skipHolidays, true);
+    assert.equal(file.jobs[2]?.skipHolidays, false);
+    assert.equal(file.jobs[2]?.cron, "40 12 */5 * *");
     assert.equal(file.jobs[3]?.skill, "translation-llm-quality");
-    assert.match(file.jobs[0]?.extraPrompt ?? "", /法定假日/);
-    assert.match(file.jobs[2]?.extraPrompt ?? "", /interval --days 5/);
-    assert.match(file.jobs[3]?.extraPrompt ?? "", /只做翻译域/);
   });
 
   it("rejects illegal skill names", () => {
@@ -84,83 +82,129 @@ describe("loadJobsFile", () => {
 });
 
 describe("cronHitsMinute", () => {
-  it("hits 09:30 for error-alert and not 09:31", () => {
-    assert.equal(cronHitsMinute("30 9 * * *", TZ, AT_0930), true);
-    assert.equal(cronHitsMinute("30 9 * * *", TZ, AT_0931), false);
+  it("hits 12:00 daily and not 12:01", () => {
+    assert.equal(cronHitsMinute("0 12 * * *", TZ, AT_1200), true);
+    assert.equal(cronHitsMinute("0 12 * * *", TZ, AT_1201), false);
   });
 
-  it("hits 13:00 for lot-tag-audit and 14:00 for translation-audit", () => {
-    assert.equal(cronHitsMinute("0 13 * * *", TZ, AT_1300), true);
-    assert.equal(cronHitsMinute("0 13 * * *", TZ, AT_0930), false);
-    assert.equal(cronHitsMinute("0 14 * * *", TZ, AT_1400), true);
-    assert.equal(cronHitsMinute("0 14 * * *", TZ, AT_1300), false);
+  it("hits day-of-month */5 and misses other days", () => {
+    assert.equal(cronHitsMinute("40 12 */5 * *", TZ, AT_1240_D21), true);
+    assert.equal(cronHitsMinute("40 12 */5 * *", TZ, AT_1240_D23), false);
   });
 });
 
-describe("dueJobs", () => {
-  it("returns the matching enabled job once per minute", () => {
-    const file = parseJobsFile(EXAMPLE);
-    const last = new Map<string, string>();
-    const first = dueJobs(file, AT_0930, last);
-    assert.deepEqual(
-      first.map((j) => j.id),
-      ["error-alert"],
-    );
-    last.set("error-alert", minuteKey(AT_0930, TZ));
-    assert.deepEqual(dueJobs(file, AT_0930, last), []);
+describe("holidays / dueJobs", () => {
+  it("treats National Day as holiday", () => {
+    assert.equal(isCnHoliday(AT_ND, TZ), true);
+    assert.equal(isCnHoliday(AT_1200, TZ), false);
   });
 
-  it("skips disabled jobs", () => {
+  it("skips holiday-gated jobs and still fires */5 on the 21st", () => {
     const file = parseJobsFile(EXAMPLE);
-    file.jobs[0]!.enabled = false;
-    assert.deepEqual(dueJobs(file, AT_0930, new Map()), []);
+    assert.deepEqual(
+      dueJobs(file, AT_ND, new Map()).map((j) => j.id),
+      [],
+    );
+    assert.deepEqual(
+      dueJobs(file, AT_1240_D21, new Map()).map((j) => j.id),
+      ["lot-tag-audit"],
+    );
+  });
+
+  it("returns error-alert once per minute on a normal day", () => {
+    const file = parseJobsFile(EXAMPLE);
+    const last = new Map<string, string>();
+    assert.deepEqual(
+      dueJobs(file, AT_1200, last).map((j) => j.id),
+      ["error-alert"],
+    );
+    last.set("error-alert", minuteKey(AT_1200, TZ));
+    assert.deepEqual(dueJobs(file, AT_1200, last), []);
+  });
+});
+
+describe("enqueueUnique", () => {
+  it("dedupes by id", () => {
+    const file = parseJobsFile(EXAMPLE);
+    const q = [];
+    assert.equal(enqueueUnique(q, file.jobs[0]!), true);
+    assert.equal(enqueueUnique(q, file.jobs[0]!), false);
+    assert.equal(q.length, 1);
   });
 });
 
 describe("buildJobPrompt", () => {
-  it("points at WCB_OUTPUT and the skill path", () => {
+  it("points at WCB_OUTPUT and the skill path without gate scripts", () => {
     const file = parseJobsFile(EXAMPLE);
     const text = buildJobPrompt(file.jobs[2]!);
     assert.match(text, /\.cursor\/skills-wcb\/WCB_OUTPUT\.md/);
     assert.match(text, /\.cursor\/skills-wcb\/lot-tagging-llm-quality\/SKILL\.md/);
-    assert.match(text, /lookback-days=5/);
+    assert.doesNotMatch(text, /schedule_gate/);
   });
 });
 
 describe("startScheduler", () => {
-  it("skips the tick when agent is busy", async () => {
+  it("enqueues when busy and drains when free", async () => {
     const file = parseJobsFile(EXAMPLE);
-    let skips = 0;
-    let fired = 0;
+    const fired: string[] = [];
+    let busy = true;
     const sched = startScheduler({
-      intervalMs: 60_000,
-      now: () => AT_0930,
+      intervalMs: 25,
+      now: () => AT_1200,
       file,
-      isBusy: () => true,
-      onSkip: () => {
-        skips += 1;
+      canStart: () => !busy,
+      onDue: async (job) => {
+        fired.push(job.id);
       },
-      onDue: async () => {
-        fired += 1;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(fired, []);
+    busy = false;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    sched.stop();
+    assert.deepEqual(fired, ["error-alert"]);
+  });
+
+  it("pauses drain when canStart flips false between jobs", async () => {
+    const file = parseJobsFile(`
+timezone: Asia/Shanghai
+notifyUser: ""
+jobs:
+  - id: a
+    cron: "0 12 * * *"
+    skill: aliyun-error-log
+  - id: b
+    cron: "0 12 * * *"
+    skill: notify-fail
+`);
+    const fired: string[] = [];
+    let busy = false;
+    const sched = startScheduler({
+      intervalMs: 25,
+      now: () => AT_1200,
+      file,
+      canStart: () => !busy,
+      onDue: async (job) => {
+        fired.push(job.id);
+        busy = true;
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(fired, ["a"]);
+    busy = false;
+    await new Promise((resolve) => setTimeout(resolve, 40));
     sched.stop();
-    assert.ok(skips >= 1);
-    assert.equal(fired, 0);
+    assert.deepEqual(fired, ["a", "b"]);
   });
 
-  it("fires the matching job once when idle", async () => {
+  it("fires immediately when idle", async () => {
     const file = parseJobsFile(EXAMPLE);
     let fired = 0;
     const sched = startScheduler({
       intervalMs: 60_000,
-      now: () => AT_0930,
+      now: () => AT_1200,
       file,
-      isBusy: () => false,
-      onSkip: () => {
-        /* unused */
-      },
+      canStart: () => true,
       onDue: async (job) => {
         fired += 1;
         assert.equal(job.id, "error-alert");

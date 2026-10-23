@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { appendDraft, clearDraft, draftStats, flushDraft, type DraftMap } from "./draft.js";
+import {
+  appendDraft,
+  clearDraft,
+  draftStats,
+  flushDraft,
+  hasDraft,
+  type DraftMap,
+} from "./draft.js";
 
 describe("draft buffer", () => {
   it("appends lines and flushes joined text", () => {
@@ -19,5 +26,14 @@ describe("draft buffer", () => {
     clearDraft(map, "a");
     assert.equal(flushDraft(map, "a"), "");
     assert.equal(flushDraft(map, "b"), "B");
+  });
+
+  it("hasDraft is true only with unsent lines", () => {
+    const map: DraftMap = {};
+    assert.equal(hasDraft(map, "u1"), false);
+    appendDraft(map, "u1", "待发");
+    assert.equal(hasDraft(map, "u1"), true);
+    flushDraft(map, "u1");
+    assert.equal(hasDraft(map, "u1"), false);
   });
 });
