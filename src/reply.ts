@@ -65,6 +65,34 @@ export function chunkText(input: string, maxChars: number): string[] {
   });
 }
 
-export function formatDraftAck(lines: number, chars: number): string {
-  return `草稿 ${lines} 条 / ${chars} 字。发送。。  关闭。。，`;
+const HINT_SEND = "发送：单独发两个句号（。。 或 ..）";
+const HINT_CLOSE = "关闭：两个句号加逗号（。。， 或 ..,）";
+
+/** iLink 常把换行挤成一行，用句号隔开。 */
+export function formatDraftAck(): string {
+  return `${HINT_SEND}。${HINT_CLOSE}`;
+}
+
+export function formatDraftFull(maxLines: number): string {
+  return `草稿已满（${maxLines} 条），请先发送或关闭。${HINT_SEND}。${HINT_CLOSE}`;
+}
+
+/**
+ * CLI 模型不存在时不要把 Available models 整表回微信。
+ */
+export function formatAgentError(raw: string): string {
+  const model = /Cannot use this model:\s*([A-Za-z0-9._-]+)/i.exec(raw)?.[1];
+  if (model) {
+    return `模型不可用：${model}。把 CURSOR_CLI_MODEL 改成本机 agent 支持的名字，或设为 auto。`;
+  }
+  const text = raw.replace(/\s+/g, " ").trim();
+  return `失败：${text.slice(0, 200)}`;
+}
+
+export function formatBusyHint(): string {
+  return "正在执行。要打断请单独发两个句号加逗号（。。， 或 ..,）";
+}
+
+export function formatEmptyDraftHint(): string {
+  return "草稿是空的，先发内容，再单独发两个句号（。。 或 ..）";
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { chunkText, formatDraftAck, stripMarkdown } from "./reply.js";
+import { chunkText, formatAgentError, formatDraftAck, stripMarkdown } from "./reply.js";
 
 describe("stripMarkdown", () => {
   it("drops fences headings and emphasis", () => {
@@ -35,7 +35,22 @@ describe("chunkText", () => {
 });
 
 describe("formatDraftAck", () => {
-  it("tells send and close marks", () => {
-    assert.equal(formatDraftAck(2, 87), "草稿 2 条 / 87 字。发送。。  关闭。。，");
+  it("only tells send and close marks", () => {
+    const text = formatDraftAck();
+    assert.match(text, /两个句号/);
+    assert.match(text, /逗号/);
+    assert.doesNotMatch(text, /已收/);
+    assert.doesNotMatch(text, /100/);
+  });
+});
+
+describe("formatAgentError", () => {
+  it("hides the available-models dump", () => {
+    const raw =
+      "Cannot use this model: grok-4.6-fast. Available models: auto, gpt-5.3-codex-low";
+    const text = formatAgentError(raw);
+    assert.match(text, /模型不可用：grok-4\.6-fast/);
+    assert.doesNotMatch(text, /Available models/);
+    assert.doesNotMatch(text, /gpt-5/);
   });
 });

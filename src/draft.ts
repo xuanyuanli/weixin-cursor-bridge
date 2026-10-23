@@ -1,3 +1,6 @@
+/** Max WeChat messages kept in one draft before send/close. */
+export const MAX_DRAFT_LINES = 100;
+
 export type DraftState = {
   lines: string[];
 };

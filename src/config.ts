@@ -86,7 +86,9 @@ export function loadConfig(): AppConfig {
   return {
     allowFrom: splitIds(process.env.WEIXIN_ALLOW_FROM),
     cursorCliPath: (process.env.CURSOR_CLI_PATH ?? "").trim(),
-    cursorModel: (process.env.CURSOR_CLI_MODEL ?? "auto").trim() || "auto",
+    cursorModel:
+      (process.env.CURSOR_CLI_MODEL ?? "cursor-grok-4.6-high-fast").trim() ||
+      "cursor-grok-4.6-high-fast",
     workspace,
     wechatMaxChars: Number.isFinite(max) && max > 0 ? Math.min(max, 1800) : 1800,
   };

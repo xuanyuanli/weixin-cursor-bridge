@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import qrcodeTerminal from "qrcode-terminal";
+import { info } from "../log.js";
 import { writeJson } from "../store.js";
 
 const DEFAULT_BASE = "https://ilinkai.weixin.qq.com";
@@ -154,10 +155,10 @@ export async function loginWithQr(destPath: string): Promise<Credentials> {
     throw new Error("get_bot_qrcode returned no qrcode");
   }
 
-  console.log("请用微信扫描二维码登录：");
+  info("请用微信扫描二维码登录");
   qrcodeTerminal.generate(img, { small: true });
   if (img.startsWith("http")) {
-    console.log(img);
+    info(img);
   }
 
   for (;;) {
@@ -185,7 +186,7 @@ export async function loginWithQr(destPath: string): Promise<Credentials> {
         throw new Error("confirmed without bot_token");
       }
       writeJson(destPath, creds);
-      console.log("登录成功");
+      info(`登录成功 user=${creds.userId ?? "-"}`);
       return creds;
     }
     if (st === "expired") {

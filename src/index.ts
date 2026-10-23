@@ -20,13 +20,22 @@ import {
 import {
   appendDraft,
   clearDraft,
-  draftStats,
   flushDraft,
   hasDraft,
+  MAX_DRAFT_LINES,
   type DraftMap,
 } from "./draft.js";
-import { CLOSE_MARK, parseInbound, SEND_MARK } from "./protocol.js";
-import { chunkText, formatDraftAck, stripMarkdown } from "./reply.js";
+import { error as logError, info, preview, warn } from "./log.js";
+import { parseInbound } from "./protocol.js";
+import {
+  chunkText,
+  formatAgentError,
+  formatBusyHint,
+  formatDraftAck,
+  formatDraftFull,
+  formatEmptyDraftHint,
+  stripMarkdown,
+} from "./reply.js";
 import { readJson, writeJson } from "./store.js";
 import {
   type Credentials,
@@ -69,7 +78,7 @@ function authorize(sender: string, envIds: string[]): boolean {
   const ids = loadAllow(envIds);
   if (ids.length === 0) {
     saveAllow([sender]);
-    console.log(`allowlist bound first sender ${sender}`);
+    info(`白名单绑定首位 ${sender}`);
     return true;
   }
   return ids.includes(sender);
@@ -84,10 +93,11 @@ async function reply(
 ): Promise<void> {
   const token = tokens[to];
   if (!token) {
-    console.error(`no context_token for ${to}, skip send`);
+    warn(`出站跳过 ${to}：无 context_token`);
     return;
   }
   const chunks = chunkText(stripMarkdown(text), maxChars);
+  info(`出站 ${to} ${String(chunks.length)}段 ${String(text.length)}字 「${preview(text)}」`);
   for (let i = 0; i < chunks.length; i += 1) {
     await sendText(creds, to, chunks[i], token);
     if (i < chunks.length - 1) {
@@ -119,9 +129,9 @@ async function main(): Promise<void> {
   if (process.argv.includes("--logout")) {
     try {
       unlinkSync(CREDENTIALS_PATH);
-      console.log("已清除登录凭证");
+      info("已清除登录凭证");
     } catch {
-      console.log("没有已保存的凭证");
+      info("没有已保存的凭证");
     }
     return;
   }
@@ -130,9 +140,13 @@ async function main(): Promise<void> {
   const agentPath = resolveAgentPath(config.cursorCliPath);
 
   const saved = readJson<Credentials | null>(CREDENTIALS_PATH, null);
-  let creds: Credentials = saved?.botToken
-    ? saved
-    : await loginWithQr(CREDENTIALS_PATH);
+  let creds: Credentials;
+  if (saved?.botToken) {
+    creds = saved;
+    info(`使用已保存凭证 user=${saved.userId ?? "-"}`);
+  } else {
+    creds = await loginWithQr(CREDENTIALS_PATH);
+  }
 
   const allow = loadAllow(config.allowFrom);
   if (allow.length === 0 && creds.userId) {
@@ -146,8 +160,10 @@ async function main(): Promise<void> {
     get_updates_buf: "",
   });
 
-  console.log(`weixin-cursor-bridge 已启动 workspace=${config.workspace}`);
-  console.log(`agent=${agentPath}`);
+  info(
+    `已启动 workspace=${config.workspace} model=${config.cursorModel} agent=${agentPath}`,
+  );
+  info(`白名单 ${String(allow.length)} 人 草稿${String(Object.keys(drafts).length)}份`);
 
   const persistDrafts = (): void => writeJson(DRAFTS_PATH, drafts);
   const persistSessions = (): void => writeJson(SESSIONS_PATH, sessions);
@@ -159,20 +175,23 @@ async function main(): Promise<void> {
   let scheduledRunning = false;
   const jobsFile = loadJobsFile(JOBS_PATH);
   if (!jobsFile) {
-    console.log("无 jobs.yaml，仅交互");
+    info("无 jobs.yaml，仅交互");
   } else {
-    console.log(`已加载 ${String(jobsFile.jobs.length)} 个计划任务`);
+    info(`已加载 ${String(jobsFile.jobs.length)} 个计划任务`);
     startScheduler({
       file: jobsFile,
       canStart: () => jobs.size === 0 && !scheduledRunning,
       onSkip: (reason) => {
-        console.log(`schedule skip: ${reason}`);
+        info(`计划跳过 ${reason}`);
+      },
+      onEnqueue: (job, waiting) => {
+        info(`计划入队 ${job.id} 排队=${String(waiting)}`);
       },
       onDue: async (spec) => {
         scheduledRunning = true;
         const notifyUser = pickNotifyUser(jobsFile, tokens);
         const sessionKey = jobSessionKey(spec.id);
-        console.log(`schedule fire ${spec.id} skill=${spec.skill}`);
+        info(`计划执行 ${spec.id} skill=${spec.skill} notify=${notifyUser || "-"}`);
         try {
           const run = startAgent({
             agentPath,
@@ -203,17 +222,17 @@ async function main(): Promise<void> {
             if (notifyUser && tokens[notifyUser]) {
               await send(notifyUser, result.text || "（无输出）");
             } else {
-              console.log(`schedule ${spec.id} done, no context_token, skip push`);
+              info(`计划 ${spec.id} 完成，无 context_token，不推微信`);
             }
           } catch (err) {
             if (err instanceof AgentCancelled) {
+              info(`计划 ${spec.id} 已取消`);
               return;
             }
             const message = err instanceof Error ? err.message : String(err);
+            logError(`计划 ${spec.id} 失败`, message);
             if (notifyUser && tokens[notifyUser]) {
-              await send(notifyUser, `失败：${message.slice(0, 400)}`);
-            } else {
-              console.error(`schedule ${spec.id} failed`, message);
+              await send(notifyUser, formatAgentError(message));
             }
           } finally {
             if (notifyUser) {
@@ -228,18 +247,20 @@ async function main(): Promise<void> {
     });
   }
 
+  let lastAliveAt = Date.now();
+
   for (;;) {
     let poll;
     try {
       poll = await pollUpdates(creds, updates.get_updates_buf);
     } catch (err) {
-      console.error("getupdates failed", err);
+      logError("getupdates 失败", err);
       await sleep(2_000);
       continue;
     }
 
     if (poll.sessionExpired) {
-      console.error("session expired, need re-login");
+      warn("会话过期，重新扫码");
       try {
         unlinkSync(CREDENTIALS_PATH);
       } catch {
@@ -256,6 +277,16 @@ async function main(): Promise<void> {
       writeJson(UPDATES_PATH, updates);
     }
 
+    if (Date.now() - lastAliveAt >= 10 * 60_000) {
+      info(`存活 交互=${String(jobs.size)} 计划中=${scheduledRunning ? "是" : "否"}`);
+      lastAliveAt = Date.now();
+    }
+
+    if (poll.messages.length > 0) {
+      info(`入站 ${String(poll.messages.length)} 条`);
+      lastAliveAt = Date.now();
+    }
+
     for (const msg of poll.messages) {
       if (msg.contextToken) {
         tokens[msg.fromUserId] = msg.contextToken;
@@ -263,6 +294,7 @@ async function main(): Promise<void> {
       }
 
       if (!authorize(msg.fromUserId, config.allowFrom)) {
+        warn(`入站拒绝 ${msg.fromUserId} 「${preview(msg.text)}」`);
         await send(msg.fromUserId, "未授权");
         continue;
       }
@@ -272,35 +304,45 @@ async function main(): Promise<void> {
         if (!action.text) {
           continue;
         }
-        const state = appendDraft(drafts, msg.fromUserId, action.text);
+        if ((drafts[msg.fromUserId]?.lines.length ?? 0) >= MAX_DRAFT_LINES) {
+          warn(`草稿已满 ${msg.fromUserId}`);
+          await send(msg.fromUserId, formatDraftFull(MAX_DRAFT_LINES));
+          continue;
+        }
+        appendDraft(drafts, msg.fromUserId, action.text);
         persistDrafts();
-        const stats = draftStats(state);
-        await send(msg.fromUserId, formatDraftAck(stats.lines, stats.chars));
+        const n = drafts[msg.fromUserId]?.lines.length ?? 0;
+        info(`草稿 ${msg.fromUserId} 第${String(n)}条 「${preview(action.text)}」`);
+        await send(msg.fromUserId, formatDraftAck());
         continue;
       }
 
       if (action.type === "close") {
-        closeJob(msg.fromUserId);
+        const cancelled = closeJob(msg.fromUserId);
         clearDraft(drafts, msg.fromUserId);
         delete sessions[msg.fromUserId];
         persistDrafts();
         persistSessions();
+        info(`关闭 ${msg.fromUserId} 取消任务=${cancelled ? "是" : "否"}`);
         await send(msg.fromUserId, "已关闭");
         continue;
       }
 
       if (jobs.has(msg.fromUserId) || scheduledRunning) {
-        await send(msg.fromUserId, `执行中，先 ${CLOSE_MARK} 关闭`);
+        info(`忙碌拒绝 ${msg.fromUserId}`);
+        await send(msg.fromUserId, formatBusyHint());
         continue;
       }
 
       const body = flushDraft(drafts, msg.fromUserId);
       persistDrafts();
       if (!body) {
-        await send(msg.fromUserId, `草稿为空，先发内容再 ${SEND_MARK}`);
+        info(`空草稿发送 ${msg.fromUserId}`);
+        await send(msg.fromUserId, formatEmptyDraftHint());
         continue;
       }
 
+      info(`提交 ${msg.fromUserId} ${String(body.length)}字`);
       await send(msg.fromUserId, "已提交，执行中");
       if (msg.contextToken) {
         void sendTyping(creds, msg.fromUserId, msg.contextToken);
@@ -338,16 +380,18 @@ async function main(): Promise<void> {
           stopHeartbeat(job);
           jobs.delete(msg.fromUserId);
           if (err instanceof AgentCancelled) {
+            info(`交互已取消 ${msg.fromUserId}`);
             return;
           }
           const message = err instanceof Error ? err.message : String(err);
-          await send(msg.fromUserId, `失败：${message.slice(0, 400)}`);
+          logError(`交互失败 ${msg.fromUserId}`, message);
+          await send(msg.fromUserId, formatAgentError(message));
         });
     }
   }
 }
 
 main().catch((err: unknown) => {
-  console.error(err);
+  logError("进程退出", err);
   process.exit(1);
 });

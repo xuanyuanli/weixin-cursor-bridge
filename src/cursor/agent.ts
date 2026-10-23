@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { platform } from "node:os";
 import { defaultAgentCandidates } from "../config.js";
+import { error as logError, info, preview, warn } from "../log.js";
 import { buildPrompt } from "./prompt.js";
 
 export type AgentRun = {
@@ -119,9 +120,14 @@ export function startAgent(opts: {
   args.push(buildPrompt(opts.userText));
 
   const child = spawnAgent(opts.agentPath, args, opts.workspace);
+  const startedAt = Date.now();
   let stdout = "";
   let stderr = "";
   let killed = false;
+  const resume = opts.sessionId ? "是" : "否";
+  info(
+    `agent 启动 pid=${String(child.pid ?? "-")} model=${opts.model || "auto"} resume=${resume} 「${preview(opts.userText)}」`,
+  );
 
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
@@ -130,27 +136,43 @@ export function startAgent(opts: {
   });
   child.stderr?.on("data", (chunk: string) => {
     stderr += chunk;
+    for (const line of chunk.split(/\r?\n/)) {
+      const text = line.trim();
+      if (text) {
+        warn(`agent ${preview(text, 200)}`);
+      }
+    }
   });
 
   const cancel = (): void => {
     killed = true;
+    info(`agent 取消 pid=${String(child.pid ?? "-")}`);
     killAgent(child);
   };
 
+  const elapsed = (): string => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+
   const done = new Promise<AgentResult>((resolve, reject) => {
-    child.on("error", reject);
+    child.on("error", (err) => {
+      logError(`agent 无法启动`, err);
+      reject(err);
+    });
     child.on("close", (code) => {
       if (killed) {
         reject(new AgentCancelled());
         return;
       }
       if (code !== 0) {
-        reject(new Error(stderr.trim() || stdout.trim() || `agent exited ${String(code)}`));
+        const detail = stderr.trim() || stdout.trim() || `agent exited ${String(code)}`;
+        logError(`agent 退出 code=${String(code)} ${elapsed()} ${preview(detail, 200)}`);
+        reject(new Error(detail));
         return;
       }
       const parsed = parseAgentJson(stdout);
+      const text = parsed.result ?? stdout.trim();
+      info(`agent 结束 ${elapsed()} 回复${String(text.length)}字 session=${parsed.session_id ? "有" : "无"}`);
       resolve({
-        text: parsed.result ?? stdout.trim(),
+        text,
         sessionId: parsed.session_id,
         killed: false,
       });

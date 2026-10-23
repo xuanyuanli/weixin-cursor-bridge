@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Cron } from "croner";
 import { isCnHoliday } from "./holidays.js";
+import { error as logError } from "./log.js";
 import { parse } from "yaml";
 
 export type JobSpec = {
@@ -175,6 +176,7 @@ export type SchedulerHooks = {
   file: JobsFile;
   canStart: () => boolean;
   onSkip?: (reason: string) => void;
+  onEnqueue?: (job: JobSpec, waiting: number) => void;
   onDue: (job: JobSpec) => Promise<void>;
 };
 
@@ -202,7 +204,9 @@ export function startScheduler(hooks: SchedulerHooks): { stop: () => void } {
         hooks.onSkip?.(`holiday ${job.id}`);
         continue;
       }
-      enqueueUnique(queue, job);
+      if (enqueueUnique(queue, job)) {
+        hooks.onEnqueue?.(job, queue.length);
+      }
     }
     if (inflight || !hooks.canStart() || queue.length === 0) {
       return;
@@ -220,7 +224,7 @@ export function startScheduler(hooks: SchedulerHooks): { stop: () => void } {
         try {
           await hooks.onDue(job);
         } catch (err) {
-          console.error(`job ${job.id} failed`, err);
+          logError(`计划任务 ${job.id} 未捕获异常`, err);
         }
       }
     } finally {
