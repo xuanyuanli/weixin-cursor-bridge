@@ -6,7 +6,6 @@ import {
   assertCdnUrl,
   cdnDownloadUrl,
   collectTextItems,
-  formatImageLine,
   guessImageExt,
   listImageItems,
   parseAesKey,
@@ -43,6 +42,5 @@ describe("weixin media", () => {
     ];
     assert.equal(collectTextItems(items), "看看这个问题");
     assert.equal(listImageItems(items).length, 1);
-    assert.equal(formatImageLine("D:\\\\a.jpg"), "请阅读这张截图：D:\\\\a.jpg");
   });
 });

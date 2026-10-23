@@ -20,7 +20,9 @@ import {
 } from "./schedule.js";
 import {
   appendDraft,
+  appendDraftImage,
   clearDraft,
+  draftSize,
   flushDraft,
   peekDraft,
   MAX_DRAFT_LINES,
@@ -240,7 +242,7 @@ async function main(): Promise<void> {
   }
 
   for (const [userId, state] of Object.entries(drafts)) {
-    const n = state.lines.length;
+    const n = draftSize(state);
     if (n === 0) {
       continue;
     }
@@ -301,22 +303,34 @@ async function main(): Promise<void> {
       }
 
       const action = parseInbound(msg.text);
-      if (action.type === "draft") {
-        if (!action.text) {
-          continue;
+      if (action.type !== "draft") {
+        for (const path of msg.images) {
+          appendDraftImage(drafts, msg.fromUserId, path);
         }
-        if ((drafts[msg.fromUserId]?.lines.length ?? 0) >= MAX_DRAFT_LINES) {
-          warn(`草稿已满 ${msg.fromUserId}`);
-          await send(msg.fromUserId, formatDraftFull(MAX_DRAFT_LINES));
-          continue;
+        if (msg.images.length > 0) {
+          persistDrafts();
         }
-        appendDraft(drafts, msg.fromUserId, action.text);
-        persistDrafts();
-        const n = drafts[msg.fromUserId]?.lines.length ?? 0;
-        info(`草稿 ${msg.fromUserId} 第${String(n)}条 「${preview(action.text)}」`);
+        commands.push(msg);
         continue;
       }
-      commands.push(msg);
+      if (!action.text && msg.images.length === 0) {
+        continue;
+      }
+      if (draftSize(drafts[msg.fromUserId]) >= MAX_DRAFT_LINES) {
+        warn(`草稿已满 ${msg.fromUserId}`);
+        await send(msg.fromUserId, formatDraftFull(MAX_DRAFT_LINES));
+        continue;
+      }
+      if (action.text) {
+        appendDraft(drafts, msg.fromUserId, action.text);
+      }
+      for (const path of msg.images) {
+        appendDraftImage(drafts, msg.fromUserId, path);
+      }
+      persistDrafts();
+      const n = draftSize(drafts[msg.fromUserId]);
+      const hint = action.text || `${String(msg.images.length)}图`;
+      info(`草稿 ${msg.fromUserId} 第${String(n)}条 「${preview(hint)}」`);
     }
 
     for (const msg of commands) {

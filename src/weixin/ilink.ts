@@ -4,7 +4,6 @@ import { info, warn } from "../log.js";
 import { writeJson } from "../store.js";
 import {
   collectTextItems,
-  formatImageLine,
   IMAGE_FAIL_LINE,
   listImageItems,
   saveInboundImage,
@@ -25,6 +24,7 @@ export type Credentials = {
 export type WeixinInbound = {
   fromUserId: string;
   text: string;
+  images: string[];
   contextToken?: string;
 };
 
@@ -125,28 +125,26 @@ async function apiGet(
   }
 }
 
-async function extractInbound(msg: Record<string, unknown>, inboxDir: string): Promise<string> {
+async function extractInbound(
+  msg: Record<string, unknown>,
+  inboxDir: string,
+): Promise<{ text: string; images: string[] }> {
   const items = (msg.item_list as Array<Record<string, unknown>> | undefined) ?? [];
-  if (!items.length) {
-    return "";
-  }
-  const parts: string[] = [];
-  const text = collectTextItems(items);
-  if (text) {
-    parts.push(text);
-  }
+  const images: string[] = [];
+  const failNotes: string[] = [];
   for (const image of listImageItems(items)) {
     try {
       const dest = await saveInboundImage(image, inboxDir);
-      parts.push(formatImageLine(dest));
+      images.push(dest);
       info(`入站图片 ${dest}`);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       warn(`入站图片失败 ${detail}`);
-      parts.push(IMAGE_FAIL_LINE);
+      failNotes.push(IMAGE_FAIL_LINE);
     }
   }
-  return parts.join("\n\n").trim();
+  const text = [collectTextItems(items), ...failNotes].filter(Boolean).join("\n\n").trim();
+  return { text, images };
 }
 
 /**
@@ -238,14 +236,15 @@ export async function pollUpdates(
       if (Number(msg.message_type) !== 1) {
         continue;
       }
-      const text = await extractInbound(msg, inboxDir);
+      const extracted = await extractInbound(msg, inboxDir);
       const fromUserId = String(msg.from_user_id ?? "");
-      if (!fromUserId || !text) {
+      if (!fromUserId || (!extracted.text && extracted.images.length === 0)) {
         continue;
       }
       messages.push({
         fromUserId,
-        text,
+        text: extracted.text,
+        images: extracted.images,
         contextToken: msg.context_token ? String(msg.context_token) : undefined,
       });
     }

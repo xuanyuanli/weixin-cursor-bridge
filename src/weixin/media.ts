@@ -89,10 +89,6 @@ export function guessImageExt(bytes: Buffer): string {
   return ".jpg";
 }
 
-export function formatImageLine(absPath: string): string {
-  return `请阅读这张截图：${absPath}`;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
