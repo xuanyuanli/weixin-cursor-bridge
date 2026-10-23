@@ -1,7 +1,14 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import qrcodeTerminal from "qrcode-terminal";
-import { info } from "../log.js";
+import { info, warn } from "../log.js";
 import { writeJson } from "../store.js";
+import {
+  collectTextItems,
+  formatImageLine,
+  IMAGE_FAIL_LINE,
+  listImageItems,
+  saveInboundImage,
+} from "./media.js";
 
 const DEFAULT_BASE = "https://ilinkai.weixin.qq.com";
 const CHANNEL_VERSION = "1.0.3";
@@ -118,20 +125,28 @@ async function apiGet(
   }
 }
 
-function extractText(msg: Record<string, unknown>): string {
-  const items = msg.item_list as Array<Record<string, unknown>> | undefined;
-  if (!items?.length) {
+async function extractInbound(msg: Record<string, unknown>, inboxDir: string): Promise<string> {
+  const items = (msg.item_list as Array<Record<string, unknown>> | undefined) ?? [];
+  if (!items.length) {
     return "";
   }
-  for (const item of items) {
-    if (item.type === 1) {
-      const textItem = item.text_item as { text?: string } | undefined;
-      if (textItem?.text) {
-        return textItem.text;
-      }
+  const parts: string[] = [];
+  const text = collectTextItems(items);
+  if (text) {
+    parts.push(text);
+  }
+  for (const image of listImageItems(items)) {
+    try {
+      const dest = await saveInboundImage(image, inboxDir);
+      parts.push(formatImageLine(dest));
+      info(`入站图片 ${dest}`);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      warn(`入站图片失败 ${detail}`);
+      parts.push(IMAGE_FAIL_LINE);
     }
   }
-  return "";
+  return parts.join("\n\n").trim();
 }
 
 /**
@@ -203,6 +218,7 @@ export type UpdatesCursor = { get_updates_buf: string };
 export async function pollUpdates(
   creds: Credentials,
   buf: string,
+  inboxDir: string,
 ): Promise<{ nextBuf: string; messages: WeixinInbound[]; sessionExpired: boolean }> {
   try {
     const resp = await apiPost(
@@ -222,7 +238,7 @@ export async function pollUpdates(
       if (Number(msg.message_type) !== 1) {
         continue;
       }
-      const text = extractText(msg);
+      const text = await extractInbound(msg, inboxDir);
       const fromUserId = String(msg.from_user_id ?? "");
       if (!fromUserId || !text) {
         continue;

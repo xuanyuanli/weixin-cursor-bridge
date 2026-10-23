@@ -1,6 +1,6 @@
 # weixin-cursor-bridge
 
-微信当输入框，本机 [Cursor CLI](https://cursor.com/docs/cli/headless) 当工人。普通消息只进草稿（最多 100 条）；单独一条两个句号才发给 `agent`；两个句号加逗号关闭当前会话。中英文句号/逗号都可以。
+微信当输入框，本机 [Cursor CLI](https://cursor.com/docs/cli/headless) 当工人。普通文字和图片只进草稿（最多 100 条）；单独一条两个句号才发给 `agent`；两个句号加逗号关闭当前会话，下一轮不会接着上一轮聊。中英文句号/逗号都可以。
 
 走腾讯官方 iLink（`ilinkai.weixin.qq.com`），不依赖 OpenClaw。需要 Node 22+ 与已登录的本机 `agent`。
 
@@ -9,8 +9,9 @@
 | 整条 trim 后 | 动作 |
 |---|---|
 | `。。` 或 `..` | 提交当前草稿。空草稿则拒绝 |
-| `。。，` 或 `..,`（中英文可混） | 杀掉在跑的 agent，丢掉 session，清空草稿 |
-| 其它 | 追加草稿（满 100 条后拒绝，需先发送或关闭） |
+| `。。，` 或 `..,`（中英文可混） | 杀掉在跑的 agent，丢掉 session，清空草稿；之后再发是新对话 |
+| 图片 | 下载到 `data/inbox/`，路径写进草稿，agent 能读到截图 |
+| 其它文字 | 追加草稿（满 100 条后拒绝，需先发送或关闭） |
 
 回选项：先发 `2` 进草稿，再发两个句号。`等一下。`、`。。。`、`。。选2` 都只当草稿。
 
@@ -42,7 +43,7 @@ npm run logout   # 清凭证，下次重新扫码
 
 复制 `jobs.example.yaml` 为 `jobs.yaml`（已 gitignore）并填 `notifyUser`。无该文件时只做交互。
 
-cron 命中则入队，同一时刻只跑一个 agent（交互与计划串行）；忙时排队，空闲后当天补跑。`skipHolidays` 跳法定假日（周末仍跑）。分类/翻译用日字段 `*/5`。任务 session 为 `jobs.<id>`；草稿为空才把当前微信 session 指过去。无 `context_token` 只打日志。
+cron 命中则入队，同一时刻只跑一个 agent（交互与计划串行）；忙时排队，空闲后当天补跑。`skipHolidays` 跳法定假日（周末仍跑）。分类/翻译用日字段 `*/5`。任务 session 只存在 `jobs.<id>`，不会写到微信会话上。无 `context_token` 只打日志。
 
 ## 合规
 

@@ -1,10 +1,11 @@
-import { unlinkSync } from "node:fs";
+import { mkdirSync, unlinkSync } from "node:fs";
 import { AgentCancelled, resolveAgentPath, startAgent } from "./cursor/agent.js";
 import {
   ALLOWLIST_PATH,
   CONTEXT_TOKENS_PATH,
   CREDENTIALS_PATH,
   DRAFTS_PATH,
+  INBOX_DIR,
   JOBS_PATH,
   loadConfig,
   SESSIONS_PATH,
@@ -21,11 +22,11 @@ import {
   appendDraft,
   clearDraft,
   flushDraft,
-  hasDraft,
   peekDraft,
   MAX_DRAFT_LINES,
   type DraftMap,
 } from "./draft.js";
+import { bumpEpoch, currentEpoch, forgetUserSession, sameEpoch } from "./session-guard.js";
 import { error as logError, info, preview, warn } from "./log.js";
 import { parseInbound } from "./protocol.js";
 import {
@@ -151,8 +152,10 @@ async function main(): Promise<void> {
     saveAllow([creds.userId]);
   }
 
+  mkdirSync(INBOX_DIR, { recursive: true });
   const drafts = readJson<DraftMap>(DRAFTS_PATH, {});
   const sessions = readJson<Sessions>(SESSIONS_PATH, {});
+  const epochs = new Map<string, number>();
   const tokens = readJson<Tokens>(CONTEXT_TOKENS_PATH, {});
   let updates = readJson<{ get_updates_buf: string }>(UPDATES_PATH, {
     get_updates_buf: "",
@@ -206,9 +209,6 @@ async function main(): Promise<void> {
             const result = await run.done;
             if (result.sessionId) {
               sessions[sessionKey] = { sessionId: result.sessionId };
-              if (notifyUser && !hasDraft(drafts, notifyUser)) {
-                sessions[notifyUser] = { sessionId: result.sessionId };
-              }
               persistSessions();
             }
             if (notifyUser && tokens[notifyUser]) {
@@ -252,7 +252,7 @@ async function main(): Promise<void> {
   for (;;) {
     let poll;
     try {
-      poll = await pollUpdates(creds, updates.get_updates_buf);
+      poll = await pollUpdates(creds, updates.get_updates_buf, INBOX_DIR);
     } catch (err) {
       logError("getupdates 失败", err);
       await sleep(2_000);
@@ -324,10 +324,13 @@ async function main(): Promise<void> {
       if (action.type === "close") {
         const cancelled = closeJob(msg.fromUserId);
         clearDraft(drafts, msg.fromUserId);
-        delete sessions[msg.fromUserId];
+        const dropped = forgetUserSession(sessions, msg.fromUserId);
+        const epoch = bumpEpoch(epochs, msg.fromUserId);
         persistDrafts();
         persistSessions();
-        info(`关闭 ${msg.fromUserId} 取消任务=${cancelled ? "是" : "否"}`);
+        info(
+          `关闭 ${msg.fromUserId} 取消任务=${cancelled ? "是" : "否"} 丢掉session=${dropped ?? "无"} epoch=${String(epoch)}`,
+        );
         await send(msg.fromUserId, "已关闭");
         continue;
       }
@@ -351,12 +354,14 @@ async function main(): Promise<void> {
         void sendTyping(creds, msg.fromUserId, msg.contextToken);
       }
 
+      const startedEpoch = currentEpoch(epochs, msg.fromUserId);
       const run = startAgent({
         agentPath,
         workspace: config.workspace,
         model: config.cursorModel,
         sessionId: sessions[msg.fromUserId]?.sessionId,
         userText: body,
+        addDirs: [INBOX_DIR],
       });
 
       const job: Job = { cancel: run.cancel, timers: [] };
@@ -366,6 +371,10 @@ async function main(): Promise<void> {
         .then(async (result) => {
           stopHeartbeat(job);
           jobs.delete(msg.fromUserId);
+          if (!sameEpoch(epochs, msg.fromUserId, startedEpoch)) {
+            info(`已关闭，丢弃结果 ${msg.fromUserId}`);
+            return;
+          }
           if (result.sessionId) {
             sessions[msg.fromUserId] = { sessionId: result.sessionId };
             persistSessions();
@@ -379,6 +388,10 @@ async function main(): Promise<void> {
           jobs.delete(msg.fromUserId);
           if (err instanceof AgentCancelled) {
             info(`交互已取消 ${msg.fromUserId}`);
+            return;
+          }
+          if (!sameEpoch(epochs, msg.fromUserId, startedEpoch)) {
+            info(`已关闭，丢弃失败结果 ${msg.fromUserId}`);
             return;
           }
           const message = err instanceof Error ? err.message : String(err);

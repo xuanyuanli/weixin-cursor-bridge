@@ -9,6 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = resolve(here, "..");
 
 export const DATA_DIR = join(PROJECT_ROOT, "data");
+export const INBOX_DIR = join(DATA_DIR, "inbox");
 export const CREDENTIALS_PATH = join(DATA_DIR, "credentials.json");
 export const UPDATES_PATH = join(DATA_DIR, "updates.json");
 export const CONTEXT_TOKENS_PATH = join(DATA_DIR, "context-tokens.json");

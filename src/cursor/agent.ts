@@ -87,6 +87,7 @@ export function startAgent(opts: {
   model: string;
   sessionId?: string;
   userText: string;
+  addDirs?: string[];
 }): AgentRun {
   const args = [
     "-p",
@@ -101,6 +102,11 @@ export function startAgent(opts: {
   if (opts.model && opts.model !== "auto") {
     args.push("--model", opts.model);
   }
+  for (const dir of opts.addDirs ?? []) {
+    if (dir) {
+      args.push("--add-dir", dir);
+    }
+  }
   if (opts.sessionId) {
     args.push("--resume", opts.sessionId);
   }
@@ -111,7 +117,7 @@ export function startAgent(opts: {
   let stdout = "";
   let stderr = "";
   let killed = false;
-  const resume = opts.sessionId ? "是" : "否";
+  const resume = opts.sessionId ? opts.sessionId.slice(0, 8) : "否";
   info(
     `agent 启动 pid=${String(child.pid ?? "-")} model=${opts.model || "auto"} resume=${resume} 「${preview(opts.userText)}」`,
   );
