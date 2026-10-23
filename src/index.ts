@@ -5,10 +5,18 @@ import {
   CONTEXT_TOKENS_PATH,
   CREDENTIALS_PATH,
   DRAFTS_PATH,
+  JOBS_PATH,
   loadConfig,
   SESSIONS_PATH,
   UPDATES_PATH,
 } from "./config.js";
+import {
+  buildJobPrompt,
+  jobSessionKey,
+  loadJobsFile,
+  pickNotifyUser,
+  startScheduler,
+} from "./schedule.js";
 import { appendDraft, clearDraft, draftStats, flushDraft, type DraftMap } from "./draft.js";
 import { CLOSE_MARK, parseInbound, SEND_MARK } from "./protocol.js";
 import { chunkText, formatDraftAck, stripMarkdown } from "./reply.js";
@@ -141,6 +149,78 @@ async function main(): Promise<void> {
   const send = (to: string, text: string): Promise<void> =>
     reply(creds, to, tokens, text, config.wechatMaxChars);
 
+  let scheduledRunning = false;
+  const jobsFile = loadJobsFile(JOBS_PATH);
+  if (!jobsFile) {
+    console.log("无 jobs.yaml，仅交互");
+  } else {
+    console.log(`已加载 ${String(jobsFile.jobs.length)} 个计划任务`);
+    startScheduler({
+      file: jobsFile,
+      isBusy: () => jobs.size > 0 || scheduledRunning,
+      onSkip: (reason) => {
+        console.log(`schedule skip: ${reason}`);
+      },
+      onDue: async (spec) => {
+        scheduledRunning = true;
+        const notifyUser = pickNotifyUser(jobsFile, tokens);
+        const sessionKey = jobSessionKey(spec.id);
+        console.log(`schedule fire ${spec.id} skill=${spec.skill}`);
+        try {
+          const run = startAgent({
+            agentPath,
+            workspace: config.workspace,
+            model: config.cursorModel,
+            sessionId: sessions[sessionKey]?.sessionId,
+            userText: buildJobPrompt(spec),
+          });
+          const job: Job = { cancel: run.cancel, startedAt: Date.now(), timers: [] };
+          if (notifyUser) {
+            jobs.set(notifyUser, job);
+            const beat = (): void => {
+              const minutes = Math.max(1, Math.floor((Date.now() - job.startedAt) / 60_000));
+              void send(notifyUser, `执行中 ${minutes} 分`);
+            };
+            job.timers.push(setTimeout(beat, HEARTBEAT_FIRST_MS));
+            job.timers.push(setInterval(beat, HEARTBEAT_EVERY_MS));
+          }
+          try {
+            const result = await run.done;
+            if (result.sessionId) {
+              sessions[sessionKey] = { sessionId: result.sessionId };
+              if (notifyUser) {
+                sessions[notifyUser] = { sessionId: result.sessionId };
+              }
+              persistSessions();
+            }
+            if (notifyUser && tokens[notifyUser]) {
+              await send(notifyUser, result.text || "（无输出）");
+            } else {
+              console.log(`schedule ${spec.id} done, no context_token, skip push`);
+            }
+          } catch (err) {
+            if (err instanceof AgentCancelled) {
+              return;
+            }
+            const message = err instanceof Error ? err.message : String(err);
+            if (notifyUser && tokens[notifyUser]) {
+              await send(notifyUser, `失败：${message.slice(0, 400)}`);
+            } else {
+              console.error(`schedule ${spec.id} failed`, message);
+            }
+          } finally {
+            if (notifyUser) {
+              stopHeartbeat(job);
+              jobs.delete(notifyUser);
+            }
+          }
+        } finally {
+          scheduledRunning = false;
+        }
+      },
+    });
+  }
+
   for (;;) {
     let poll;
     try {
@@ -202,7 +282,7 @@ async function main(): Promise<void> {
         continue;
       }
 
-      if (jobs.has(msg.fromUserId)) {
+      if (jobs.has(msg.fromUserId) || scheduledRunning) {
         await send(msg.fromUserId, `执行中，先 ${CLOSE_MARK} 关闭`);
         continue;
       }

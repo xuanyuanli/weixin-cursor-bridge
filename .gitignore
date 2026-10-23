@@ -2,6 +2,7 @@ node_modules/
 dist/
 data/
 .env
+jobs.yaml
 *.log
 .DS_Store
 Thumbs.db

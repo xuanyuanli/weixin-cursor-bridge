@@ -15,6 +15,7 @@ export const CONTEXT_TOKENS_PATH = join(DATA_DIR, "context-tokens.json");
 export const DRAFTS_PATH = join(DATA_DIR, "drafts.json");
 export const SESSIONS_PATH = join(DATA_DIR, "sessions.json");
 export const ALLOWLIST_PATH = join(DATA_DIR, "allowlist.json");
+export const JOBS_PATH = join(PROJECT_ROOT, "jobs.yaml");
 
 export type AppConfig = {
   allowFrom: string[];
