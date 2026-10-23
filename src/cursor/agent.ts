@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { platform } from "node:os";
 import { defaultAgentCandidates } from "../config.js";
 import { error as logError, info, preview, warn } from "../log.js";
+import { parseAgentOutput } from "./parse-output.js";
 import { buildPrompt } from "./prompt.js";
 
 export type AgentRun = {
@@ -75,20 +76,6 @@ export function killAgent(child: ChildProcess): void {
       child.kill("SIGKILL");
     }
   }, 5_000);
-}
-
-function parseAgentJson(stdout: string): { result?: string; session_id?: string } {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const lastBrace = trimmed.lastIndexOf("{");
-  const candidate = lastBrace >= 0 ? trimmed.slice(lastBrace) : trimmed;
-  try {
-    return JSON.parse(candidate) as { result?: string; session_id?: string };
-  } catch {
-    return { result: trimmed };
-  }
 }
 
 /**
@@ -168,12 +155,15 @@ export function startAgent(opts: {
         reject(new Error(detail));
         return;
       }
-      const parsed = parseAgentJson(stdout);
-      const text = parsed.result ?? stdout.trim();
-      info(`agent 结束 ${elapsed()} 回复${String(text.length)}字 session=${parsed.session_id ? "有" : "无"}`);
+      const parsed = parseAgentOutput(stdout);
+      if (!parsed.text) {
+        warn(`agent 结束 ${elapsed()} 无 result，stdout=${preview(stdout, 120)}`);
+      } else {
+        info(`agent 结束 ${elapsed()} 回复${String(parsed.text.length)}字 session=${parsed.sessionId ? "有" : "无"}`);
+      }
       resolve({
-        text,
-        sessionId: parsed.session_id,
+        text: parsed.text,
+        sessionId: parsed.sessionId,
         killed: false,
       });
     });

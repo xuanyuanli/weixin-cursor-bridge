@@ -33,7 +33,6 @@ import {
   formatAgentError,
   formatBusyHint,
   formatDraftFull,
-  formatDraftResumeHint,
   formatDraftStillHeld,
   formatEmptyDraftHint,
   stripMarkdown,
@@ -52,12 +51,9 @@ type Tokens = Record<string, string>;
 type AllowFile = { ids: string[] };
 
 const CHUNK_GAP_MS = 1_500;
-const HEARTBEAT_FIRST_MS = 30_000;
-const HEARTBEAT_EVERY_MS = 60_000;
 
 type Job = {
   cancel: () => void;
-  startedAt: number;
   timers: NodeJS.Timeout[];
 };
 
@@ -202,15 +198,9 @@ async function main(): Promise<void> {
             sessionId: sessions[sessionKey]?.sessionId,
             userText: buildJobPrompt(spec),
           });
-          const job: Job = { cancel: run.cancel, startedAt: Date.now(), timers: [] };
+          const job: Job = { cancel: run.cancel, timers: [] };
           if (notifyUser) {
             jobs.set(notifyUser, job);
-            const beat = (): void => {
-              const minutes = Math.max(1, Math.floor((Date.now() - job.startedAt) / 60_000));
-              void send(notifyUser, `执行中 ${minutes} 分`);
-            };
-            job.timers.push(setTimeout(beat, HEARTBEAT_FIRST_MS));
-            job.timers.push(setInterval(beat, HEARTBEAT_EVERY_MS));
           }
           try {
             const result = await run.done;
@@ -255,11 +245,6 @@ async function main(): Promise<void> {
       continue;
     }
     info(`恢复草稿 ${userId} ${String(n)}条`);
-    if (tokens[userId]) {
-      await send(userId, formatDraftResumeHint(n));
-    } else {
-      warn(`恢复草稿 ${userId} 无 context_token，等对方先发一条`);
-    }
   }
 
   let lastAliveAt = Date.now();
@@ -302,6 +287,7 @@ async function main(): Promise<void> {
       lastAliveAt = Date.now();
     }
 
+    const commands: typeof poll.messages = [];
     for (const msg of poll.messages) {
       if (msg.contextToken) {
         tokens[msg.fromUserId] = msg.contextToken;
@@ -330,7 +316,11 @@ async function main(): Promise<void> {
         info(`草稿 ${msg.fromUserId} 第${String(n)}条 「${preview(action.text)}」`);
         continue;
       }
+      commands.push(msg);
+    }
 
+    for (const msg of commands) {
+      const action = parseInbound(msg.text);
       if (action.type === "close") {
         const cancelled = closeJob(msg.fromUserId);
         clearDraft(drafts, msg.fromUserId);
@@ -356,7 +346,7 @@ async function main(): Promise<void> {
       }
 
       info(`提交 ${msg.fromUserId} ${String(body.length)}字（成功前保留草稿）`);
-      await send(msg.fromUserId, "已提交，执行中");
+      await send(msg.fromUserId, "执行中");
       if (msg.contextToken) {
         void sendTyping(creds, msg.fromUserId, msg.contextToken);
       }
@@ -369,15 +359,8 @@ async function main(): Promise<void> {
         userText: body,
       });
 
-      const job: Job = { cancel: run.cancel, startedAt: Date.now(), timers: [] };
+      const job: Job = { cancel: run.cancel, timers: [] };
       jobs.set(msg.fromUserId, job);
-
-      const beat = (): void => {
-        const minutes = Math.max(1, Math.floor((Date.now() - job.startedAt) / 60_000));
-        void send(msg.fromUserId, `执行中 ${minutes} 分`);
-      };
-      job.timers.push(setTimeout(beat, HEARTBEAT_FIRST_MS));
-      job.timers.push(setInterval(beat, HEARTBEAT_EVERY_MS));
 
       void run.done
         .then(async (result) => {

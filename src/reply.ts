@@ -89,7 +89,7 @@ export function formatBusyHint(): string {
 }
 
 export function formatEmptyDraftHint(): string {
-  return "草稿是空的，先发内容，再单独发两个句号（。。 或 ..）";
+  return "还没有收到要发送的话。先发文字，再单独发两个句号。";
 }
 
 export function formatDraftStillHeld(): string {
