@@ -22,6 +22,7 @@ import {
   clearDraft,
   flushDraft,
   hasDraft,
+  peekDraft,
   MAX_DRAFT_LINES,
   type DraftMap,
 } from "./draft.js";
@@ -31,8 +32,9 @@ import {
   chunkText,
   formatAgentError,
   formatBusyHint,
-  formatDraftAck,
   formatDraftFull,
+  formatDraftResumeHint,
+  formatDraftStillHeld,
   formatEmptyDraftHint,
   stripMarkdown,
 } from "./reply.js";
@@ -247,6 +249,19 @@ async function main(): Promise<void> {
     });
   }
 
+  for (const [userId, state] of Object.entries(drafts)) {
+    const n = state.lines.length;
+    if (n === 0) {
+      continue;
+    }
+    info(`恢复草稿 ${userId} ${String(n)}条`);
+    if (tokens[userId]) {
+      await send(userId, formatDraftResumeHint(n));
+    } else {
+      warn(`恢复草稿 ${userId} 无 context_token，等对方先发一条`);
+    }
+  }
+
   let lastAliveAt = Date.now();
 
   for (;;) {
@@ -313,7 +328,6 @@ async function main(): Promise<void> {
         persistDrafts();
         const n = drafts[msg.fromUserId]?.lines.length ?? 0;
         info(`草稿 ${msg.fromUserId} 第${String(n)}条 「${preview(action.text)}」`);
-        await send(msg.fromUserId, formatDraftAck());
         continue;
       }
 
@@ -334,15 +348,14 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const body = flushDraft(drafts, msg.fromUserId);
-      persistDrafts();
+      const body = peekDraft(drafts, msg.fromUserId);
       if (!body) {
         info(`空草稿发送 ${msg.fromUserId}`);
         await send(msg.fromUserId, formatEmptyDraftHint());
         continue;
       }
 
-      info(`提交 ${msg.fromUserId} ${String(body.length)}字`);
+      info(`提交 ${msg.fromUserId} ${String(body.length)}字（成功前保留草稿）`);
       await send(msg.fromUserId, "已提交，执行中");
       if (msg.contextToken) {
         void sendTyping(creds, msg.fromUserId, msg.contextToken);
@@ -374,6 +387,8 @@ async function main(): Promise<void> {
             sessions[msg.fromUserId] = { sessionId: result.sessionId };
             persistSessions();
           }
+          flushDraft(drafts, msg.fromUserId);
+          persistDrafts();
           await send(msg.fromUserId, result.text || "（无输出）");
         })
         .catch(async (err: unknown) => {
@@ -384,8 +399,11 @@ async function main(): Promise<void> {
             return;
           }
           const message = err instanceof Error ? err.message : String(err);
-          logError(`交互失败 ${msg.fromUserId}`, message);
-          await send(msg.fromUserId, formatAgentError(message));
+          logError(`交互失败 ${msg.fromUserId}，草稿仍保留`, message);
+          await send(
+            msg.fromUserId,
+            `${formatAgentError(message)} ${formatDraftStillHeld()}`,
+          );
         });
     }
   }

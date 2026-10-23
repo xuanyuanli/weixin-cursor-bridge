@@ -6,6 +6,7 @@ import {
   draftStats,
   flushDraft,
   hasDraft,
+  peekDraft,
   type DraftMap,
 } from "./draft.js";
 
@@ -35,5 +36,12 @@ describe("draft buffer", () => {
     assert.equal(hasDraft(map, "u1"), true);
     flushDraft(map, "u1");
     assert.equal(hasDraft(map, "u1"), false);
+  });
+
+  it("peekDraft does not clear", () => {
+    const map: DraftMap = {};
+    appendDraft(map, "u1", "先看登录");
+    assert.equal(peekDraft(map, "u1"), "先看登录");
+    assert.equal(hasDraft(map, "u1"), true);
   });
 });

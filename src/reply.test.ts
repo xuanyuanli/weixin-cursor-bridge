@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { chunkText, formatAgentError, formatDraftAck, stripMarkdown } from "./reply.js";
+import { chunkText, formatAgentError, formatDraftResumeHint, stripMarkdown } from "./reply.js";
 
 describe("stripMarkdown", () => {
   it("drops fences headings and emphasis", () => {
@@ -34,13 +34,9 @@ describe("chunkText", () => {
   });
 });
 
-describe("formatDraftAck", () => {
-  it("only tells send and close marks", () => {
-    const text = formatDraftAck();
-    assert.match(text, /两个句号/);
-    assert.match(text, /逗号/);
-    assert.doesNotMatch(text, /已收/);
-    assert.doesNotMatch(text, /100/);
+describe("formatDraftResumeHint", () => {
+  it("mentions leftover lines after restart", () => {
+    assert.match(formatDraftResumeHint(3), /重启后草稿还在（3 条）/);
   });
 });
 

@@ -25,12 +25,19 @@ export function appendDraft(map: DraftMap, sender: string, text: string): DraftS
 }
 
 /**
+ * Read the sender's draft without clearing it.
+ */
+export function peekDraft(map: DraftMap, sender: string): string {
+  return (map[sender]?.lines ?? []).join("\n\n").trim();
+}
+
+/**
  * Take and clear the sender's draft. Lines are joined with blank lines.
  */
 export function flushDraft(map: DraftMap, sender: string): string {
-  const current = map[sender] ?? empty();
+  const text = peekDraft(map, sender);
   delete map[sender];
-  return current.lines.join("\n\n").trim();
+  return text;
 }
 
 /**

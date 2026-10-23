@@ -68,11 +68,6 @@ export function chunkText(input: string, maxChars: number): string[] {
 const HINT_SEND = "发送：单独发两个句号（。。 或 ..）";
 const HINT_CLOSE = "关闭：两个句号加逗号（。。， 或 ..,）";
 
-/** iLink 常把换行挤成一行，用句号隔开。 */
-export function formatDraftAck(): string {
-  return `${HINT_SEND}。${HINT_CLOSE}`;
-}
-
 export function formatDraftFull(maxLines: number): string {
   return `草稿已满（${maxLines} 条），请先发送或关闭。${HINT_SEND}。${HINT_CLOSE}`;
 }
@@ -95,4 +90,12 @@ export function formatBusyHint(): string {
 
 export function formatEmptyDraftHint(): string {
   return "草稿是空的，先发内容，再单独发两个句号（。。 或 ..）";
+}
+
+export function formatDraftStillHeld(): string {
+  return "草稿还在，再发两个句号可重试。";
+}
+
+export function formatDraftResumeHint(lines: number): string {
+  return `重启后草稿还在（${String(lines)} 条）。${HINT_SEND}。${HINT_CLOSE}`;
 }
