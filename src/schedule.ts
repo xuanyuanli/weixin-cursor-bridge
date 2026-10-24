@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Cron } from "croner";
-import { isCnHoliday } from "./holidays.js";
+import { isCnWorkday } from "./holidays.js";
 import { error as logError } from "./log.js";
 import { parse } from "yaml";
 
@@ -135,7 +135,7 @@ export function dueJobs(
     if (!cronHitsMinute(job.cron, tz, now)) {
       return false;
     }
-    if (job.skipHolidays && isCnHoliday(now, tz)) {
+    if (job.skipHolidays && !isCnWorkday(now, tz)) {
       return false;
     }
     return true;
@@ -200,8 +200,8 @@ export function startScheduler(hooks: SchedulerHooks): { stop: () => void } {
         continue;
       }
       lastFired.set(job.id, key);
-      if (job.skipHolidays && isCnHoliday(now, tz)) {
-        hooks.onSkip?.(`holiday ${job.id}`);
+      if (job.skipHolidays && !isCnWorkday(now, tz)) {
+        hooks.onSkip?.(`off-day ${job.id}`);
         continue;
       }
       if (enqueueUnique(queue, job)) {

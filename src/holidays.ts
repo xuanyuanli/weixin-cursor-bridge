@@ -1,4 +1,4 @@
-/** 国务院法定放假日（Asia/Shanghai 日历日 YYYY-MM-DD）。周末不是法定假日。 */
+/** 国务院法定放假日（Asia/Shanghai 日历日 YYYY-MM-DD）。 */
 const CN_HOLIDAYS = new Set<string>([
   // 国办发明电〔2025〕7号（2026 年）
   "2026-01-01",
@@ -36,6 +36,26 @@ const CN_HOLIDAYS = new Set<string>([
   "2026-10-07",
 ]);
 
+/** 周末调休上班日。 */
+const CN_MAKEUP_WORKDAYS = new Set<string>([
+  "2026-01-04",
+  "2026-02-14",
+  "2026-02-28",
+  "2026-05-09",
+  "2026-09-20",
+  "2026-10-10",
+]);
+
+const WEEKDAY_SUN0: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
 /**
  * Calendar date in a timezone as YYYY-MM-DD.
  */
@@ -52,8 +72,35 @@ export function dateKey(at: Date, timeZone: string): string {
 }
 
 /**
+ * Weekday in `timeZone`: 0 = Sunday … 6 = Saturday.
+ */
+function weekdaySun0(at: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+  }).formatToParts(at);
+  const raw = parts.find((p) => p.type === "weekday")?.value ?? "";
+  return WEEKDAY_SUN0[raw] ?? -1;
+}
+
+/**
  * Whether `at` falls on a listed CN statutory holiday in `timeZone`.
  */
 export function isCnHoliday(at: Date, timeZone: string): boolean {
   return CN_HOLIDAYS.has(dateKey(at, timeZone));
+}
+
+/**
+ * Mainland China workday: weekdays minus holidays, plus makeup weekends.
+ */
+export function isCnWorkday(at: Date, timeZone: string): boolean {
+  const key = dateKey(at, timeZone);
+  if (CN_HOLIDAYS.has(key)) {
+    return false;
+  }
+  if (CN_MAKEUP_WORKDAYS.has(key)) {
+    return true;
+  }
+  const dow = weekdaySun0(at, timeZone);
+  return dow >= 1 && dow <= 5;
 }

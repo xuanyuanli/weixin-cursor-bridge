@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { isCnHoliday } from "./holidays.js";
+import { isCnHoliday, isCnWorkday } from "./holidays.js";
 import {
   buildJobPrompt,
   cronHitsMinute,
@@ -27,6 +27,10 @@ const AT_1240_D21 = new Date("2026-10-21T04:40:05.000Z");
 // 2026-10-23 12:40 +8; day 23 does not match
 const AT_1240_D23 = new Date("2026-10-23T04:40:05.000Z");
 const AT_ND = new Date("2026-10-01T04:00:10.000Z");
+/** 2026-10-24 12:00:10 +8 Saturday */
+const AT_SAT = new Date("2026-10-24T04:00:10.000Z");
+/** 2026-10-10 12:00:10 +8 Saturday makeup workday */
+const AT_MAKEUP = new Date("2026-10-10T04:00:10.000Z");
 
 const EXAMPLE = `
 timezone: Asia/Shanghai
@@ -99,11 +103,26 @@ describe("holidays / dueJobs", () => {
     assert.equal(isCnHoliday(AT_1200, TZ), false);
   });
 
+  it("treats weekends as off unless they are makeup workdays", () => {
+    assert.equal(isCnWorkday(AT_1200, TZ), true);
+    assert.equal(isCnWorkday(AT_SAT, TZ), false);
+    assert.equal(isCnWorkday(AT_ND, TZ), false);
+    assert.equal(isCnWorkday(AT_MAKEUP, TZ), true);
+  });
+
   it("skips holiday-gated jobs and still fires */5 on the 21st", () => {
     const file = parseJobsFile(EXAMPLE);
     assert.deepEqual(
       dueJobs(file, AT_ND, new Map()).map((j) => j.id),
       [],
+    );
+    assert.deepEqual(
+      dueJobs(file, AT_SAT, new Map()).map((j) => j.id),
+      [],
+    );
+    assert.deepEqual(
+      dueJobs(file, AT_MAKEUP, new Map()).map((j) => j.id),
+      ["error-alert"],
     );
     assert.deepEqual(
       dueJobs(file, AT_1240_D21, new Map()).map((j) => j.id),

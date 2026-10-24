@@ -43,7 +43,7 @@ npm run logout   # 清凭证，下次重新扫码
 
 复制 `jobs.example.yaml` 为 `jobs.yaml`（已 gitignore）并填 `notifyUser`。无该文件时只做交互。
 
-cron 命中则入队，同一时刻只跑一个 agent（交互与计划串行）；忙时排队，空闲后当天补跑。`skipHolidays` 跳法定假日（周末仍跑）。分类/翻译用日字段 `*/5`。任务 session 只存在 `jobs.<id>`，不会写到微信会话上。无 `context_token` 只打日志。
+cron 命中则入队，同一时刻只跑一个 agent（交互与计划串行）；忙时排队，空闲后当天补跑。`skipHolidays` 跳周末和法定假日（调休上班日仍跑）。分类/翻译用日字段 `*/5`。任务 session 只存在 `jobs.<id>`，不会写到微信会话上。无 `context_token` 只打日志。
 
 ## 合规
 
